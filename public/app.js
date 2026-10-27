@@ -58,7 +58,20 @@ function parseISO(iso) {
 }
 function pretty(iso) {
   if (!iso || !/^\d{4}-\d{2}-\d{2}/.test(iso)) return "—";
+  return new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "long", year: "numeric" }).format(parseISO(iso));
+}
+function prettyShort(iso) {
+  if (!iso || !/^\d{4}-\d{2}-\d{2}/.test(iso)) return "—";
   return new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "short" }).format(parseISO(iso)).replace(/\.$/, "");
+}
+function accountTypeLabel(type) {
+  return {
+    checking: "Дебетовая карта",
+    cash: "Наличные",
+    savings: "Накопительный счёт",
+    credit: "Кредитная карта",
+    investment: "Инвестиции",
+  }[type] || type;
 }
 function monthTitle(key) {
   if (!key) return "";
@@ -167,14 +180,18 @@ function overview() {
   const data = state.overview;
   if (!data) return `<p>Считаю…</p>`;
   const selected = data.selected || data.current;
-  const negative = data.safe < 0;
-  const noSalary = !data.salary;
-  const title = noSalary ? "Свободно на картах и в наличных" : negative ? "Не хватает до обязательств" : "Можно потратить";
-  const number = noSalary ? data.liquid : Math.abs(data.safe);
+  const accountsList = data.accounts || [];
+  const totalBalance = accountsList.reduce((sum, item) => sum + (Number(item.balance) || 0), 0);
+  const typeOrder = ["checking", "credit", "savings", "cash", "investment"];
+  const sortedAccounts = [...accountsList].sort((a, b) => {
+    const ai = typeOrder.indexOf(a.type);
+    const bi = typeOrder.indexOf(b.type);
+    return (ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi) || a.id - b.id;
+  });
   return `
     <div class="top">
       <div>
-        <p class="kicker">Сейчас · ${pretty(data.today)}</p>
+        <p class="kicker">${pretty(data.today)}</p>
         <h1>Обзор</h1>
       </div>
       <div class="ring-wrap">
@@ -187,20 +204,24 @@ function overview() {
     </div>
     <div class="grid-2">
       <section class="hero">
-        <div class="kicker">${title}</div>
-        <div class="hero-num ${negative ? "bad" : "good"}">${fmt(number)}</div>
+        <div class="kicker">Баланс</div>
+        <div class="hero-num ${totalBalance < 0 ? "bad" : "good"}">${fmt(totalBalance)}</div>
         <p class="sub">${heroText(data)}</p>
-        <div class="accounts" style="margin-top:16px">
-          ${data.accounts.map((item) => `<span class="chip"><i style="background:${color(item.color)}"></i>${esc(item.name)} · ${fmt(item.balance)}</span>`).join("")}
+        <div class="accounts" style="margin-top:16px;flex-direction:column;align-items:stretch;gap:8px">
+          ${sortedAccounts.map((item) => `
+            <div class="line" style="padding:6px 0;border-bottom:1px solid var(--line)">
+              <span><i style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${color(item.color)};margin-right:8px"></i>${esc(item.name)} · <span class="note">${esc(accountTypeLabel(item.type))}</span></span>
+              <b class="amt">${fmt(item.balance)}</b>
+            </div>`).join("") || `<p class="note">Счетов пока нет. Добавьте карту или наличные в настройках — позже сюда же смогут подтягиваться остатки из банка.</p>`}
         </div>
       </section>
       <section class="card">
-        <div class="kicker">План с зарплаты</div>
-        <h2 style="margin:8px 0 12px">${data.salary ? fmt(data.paycheck.income) : "Нет графика"}</h2>
-        ${planRow("Обязательные", data.paycheck.bills, "var(--clay)")}
-        ${planRow("В накопления", data.paycheck.savings, "var(--brass)")}
-        ${planRow("На жизнь", data.paycheck.left, "var(--olive)")}
-        <p class="note">${data.salary ? `Следующая после этой: ${pretty(data.paycheck.next)}` : "Добавьте зарплату, и здесь появится расклад выплаты."}</p>
+        <div class="kicker">Расходы на месяц</div>
+        <h2 style="margin:8px 0 12px">${fmt(selected.expense || 0)}</h2>
+        ${planRow("Нужды", selected.needs || 0, "var(--info)", selected.expense || 1)}
+        ${planRow("Желания", selected.wants || 0, "var(--accent)", selected.expense || 1)}
+        ${planRow("В накопления", selected.savings || 0, "var(--olive)", selected.expense || 1)}
+        <p class="note">${monthTitle(state.month)}${data.salary ? ` · до зарплаты свободно ${fmt(data.safe)}` : ""}</p>
         <button type="button" class="btn" data-act="open-salary" style="margin-top:12px">Зарплата пришла</button>
       </section>
     </div>
@@ -248,14 +269,14 @@ function healthWord(n) {
   return "Нужно внимание";
 }
 function heroText(data) {
-  if (!data.salary) return "Это ещё не «можно потратить». Укажите день и сумму зарплаты — иначе аренда и подписки не вычитаются из остатка.";
-  if (data.paydayOverdue) return `Выплата с ${pretty(data.salary.nextDate)} не отмечена. Пока она не внесена, эти деньги в план не входят.`;
-  if (data.safe < 0) return `До ${pretty(data.nextPayday)} обязательные платежи ${fmt(data.obligationTotal)} больше свободных денег. Крупные желания сейчас лучше не начинать.`;
+  if (!data.salary) return "Остатки по счетам. День и сумма зарплаты помогут считать свободные деньги до выплаты. Позже сюда же можно будет подтянуть данные из банка.";
+  if (data.paydayOverdue) return `Выплата с ${prettyShort(data.salary.nextDate)} не отмечена. Пока она не внесена, эти деньги в план не входят.`;
+  if (data.safe < 0) return `До ${prettyShort(data.nextPayday)} обязательные платежи ${fmt(data.obligationTotal)} больше свободных денег. Крупные желания лучше не начинать.`;
   const days = data.daysUntilPayday ?? data.safeDays;
-  return `Около ${fmt(data.daily)} в день · ${days} дн. до ${pretty(data.nextPayday)}. Обязательные ${fmt(data.obligationTotal)} уже вычтены, буфер ${fmt(data.buffer)} тоже.`;
+  return `Свободно до зарплаты: ${fmt(data.safe)} · около ${fmt(data.daily)} в день · ${days} дн. до ${prettyShort(data.nextPayday)}.`;
 }
-function planRow(label, amount, paint) {
-  const max = Math.max(Math.abs(state.overview?.paycheck?.income || 1), 1);
+function planRow(label, amount, paint, maxHint) {
+  const max = Math.max(Math.abs(maxHint ?? state.overview?.paycheck?.income ?? 1), 1);
   const width = Math.max(0, Math.min(100, (Math.abs(amount) / max) * 100));
   return `<div class="split"><span>${label}</span><div class="mini"><span style="width:${width}%;background:${paint}"></span></div><b class="amt">${fmt(amount)}</b></div>`;
 }
@@ -267,7 +288,7 @@ function allocation(selected, strategy) {
   if (!strategy) return "";
   const rows = [
     ["Нужды", selected.needsRate, strategy.needsPct, "var(--info)"],
-    ["Желания", selected.wantsRate, strategy.wantsPct, "var(--brass)"],
+    ["Желания", selected.wantsRate, strategy.wantsPct, "var(--accent)"],
     ["Накопления", selected.savingsRate, strategy.savingsPct, "var(--olive)"],
   ];
   return rows.map(([label, fact, target, paint]) => `
@@ -292,9 +313,9 @@ function chart(points) {
   const line = points.map((item, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(item.balance).toFixed(1)}`).join(" ");
   const zero = y(0);
   return `<svg class="chart" viewBox="0 0 ${w} ${h}" role="img" aria-label="Прогноз остатка">
-    <line x1="${pad}" x2="${w - pad}" y1="${zero}" y2="${zero}" stroke="rgba(243,236,220,.18)" />
-    <path d="${line} L${x(points.length - 1).toFixed(1)},${zero} L${x(0)},${zero} Z" fill="rgba(224,177,90,.13)" />
-    <path d="${line}" fill="none" stroke="#e0b15a" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round" />
+    <line x1="${pad}" x2="${w - pad}" y1="${zero}" y2="${zero}" stroke="rgba(232,241,250,.18)" />
+    <path d="${line} L${x(points.length - 1).toFixed(1)},${zero} L${x(0)},${zero} Z" fill="rgba(77,163,255,.15)" />
+    <path d="${line}" fill="none" stroke="#4da3ff" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round" />
   </svg>`;
 }
 function recCard(item) {
