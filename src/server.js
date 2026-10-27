@@ -3,6 +3,7 @@ import path from "node:path";
 import { narrate } from "./ai.js";
 import { briefingPayload, monthSlice, runAgents } from "./agents.js";
 import { publicDir } from "./config.js";
+import { maskAccount, parseAlfaExcel } from "./alfaExcel.js";
 import { parseCsv } from "./csv.js";
 import {
   ACCOUNT_TYPES,
@@ -12,6 +13,8 @@ import {
 } from "./defaults.js";
 import {
   aiSettings,
+  getImportBatch,
+  runAlfaExcelImport,
   contributeGoal,
   createAccount,
   createCategory,
@@ -305,6 +308,91 @@ route("POST", "/api/import/commit", async (req, res) => {
     created++;
   }
   json(res, 200, { created });
+});
+
+// --- Alfa-Online Excel import. Body: raw .xlsx (octet-stream / spreadsheetml) or multipart/form-data with field "file". ---
+async function readRaw(req, limit = 10_000_000) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > limit) throw new Error("Слишком большой файл");
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
+}
+
+function parseMultipart(buffer, contentType) {
+  const m = /boundary=(?:"([^"]+)"|([^;]+))/i.exec(contentType);
+  if (!m) throw new Error("Нет boundary в multipart");
+  const boundary = Buffer.from("--" + (m[1] || m[2]).trim());
+  const fields = {};
+  let file = null;
+  let pos = buffer.indexOf(boundary);
+  while (pos !== -1) {
+    const start = pos + boundary.length;
+    if (buffer.slice(start, start + 2).toString() === "--") break;
+    const headEnd = buffer.indexOf("\r\n\r\n", start);
+    if (headEnd === -1) break;
+    const head = buffer.slice(start, headEnd).toString("utf8");
+    const next = buffer.indexOf(boundary, headEnd);
+    if (next === -1) break;
+    const body = buffer.slice(headEnd + 4, next - 2);
+    const name = /name="([^"]*)"/i.exec(head)?.[1];
+    if (/filename="/i.test(head)) file = body;
+    else if (name) fields[name] = body.toString("utf8");
+    pos = next;
+  }
+  return { fields, file };
+}
+
+async function readUpload(req, url) {
+  const type = String(req.headers["content-type"] || "");
+  const raw = await readRaw(req);
+  const params = Object.fromEntries(url.searchParams);
+  if (type.startsWith("multipart/form-data")) {
+    const { fields, file } = parseMultipart(raw, type);
+    return { file, params: { ...params, ...fields } };
+  }
+  return { file: raw, params };
+}
+
+const truthy = (v) => v === true || v === "true" || v === "1";
+
+route("POST", "/api/import/alfa/preview", async (req, res, _params, url) => {
+  const { file, params } = await readUpload(req, url);
+  if (!file?.length) throw new Error("Файл не передан");
+  const parsed = await parseAlfaExcel(file, { includeHolds: truthy(params.includeHolds) });
+  const limit = Math.min(Number(params.limit) || 50, 500);
+  const importable = parsed.rows.filter((row) => !row.skipped);
+  json(res, 200, {
+    meta: { ...parsed.meta, accountNumber: maskAccount(parsed.meta.accountNumber), client: undefined },
+    counts: {
+      total: parsed.rows.length,
+      importable: importable.length,
+      holds: parsed.rows.filter((row) => row.hold).length,
+      skipped: parsed.rows.length - importable.length,
+      errors: parsed.errors.length,
+      income: importable.filter((row) => row.type === "income").length,
+      expense: importable.filter((row) => row.type === "expense").length,
+    },
+    rows: parsed.rows.slice(0, limit),
+    errors: parsed.errors,
+  });
+});
+
+route("POST", "/api/import/alfa/commit", async (req, res, _params, url) => {
+  const { file, params } = await readUpload(req, url);
+  if (!file?.length) throw new Error("Файл не передан");
+  if (!params.accountId) throw new Error("Выберите счёт");
+  const batch = await runAlfaExcelImport({ accountId: params.accountId, input: file, includeHolds: truthy(params.includeHolds) });
+  json(res, 200, { batchId: batch.id, status: batch.status, stats: batch.stats });
+});
+
+route("GET", "/api/import/batches/:id", (_req, res, params) => {
+  const batch = getImportBatch(idOf(params));
+  if (!batch) throw new Error("Импорт не найден");
+  json(res, 200, batch);
 });
 
 route("GET", "/api/ai", (_req, res) => {

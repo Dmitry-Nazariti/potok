@@ -69,3 +69,13 @@ src/ai.js         необязательная модель
 src/seed.js       демо и пустой старт
 public/           интерфейс
 ```
+
+## Импорт выписки Альфа-Онлайн (.xlsx)
+
+Зависимость: `exceljs` (`npm install`). Выписка содержит ПДн — `*.xlsx` в `.gitignore`.
+
+- `POST /api/import/alfa/preview` — тело: сырой `.xlsx` (`application/octet-stream`) или `multipart/form-data` с полем `file`. Без записи в БД; `?limit=`, `?includeHolds=true`. Номер счёта маскируется.
+- `POST /api/import/alfa/commit` — то же + `accountId` (query или поле формы). Идемпотентно: `external_id = alfa:<Код>`, повторный импорт не создаёт дублей. Холды (Дата проводки = HOLD, без Кода) по умолчанию пропускаются.
+- `GET /api/import/batches/:id` — статус и `stats` импорта.
+
+Selfcheck гоняет импорт на образце из `POTOK_ALFA_SAMPLE` (по умолчанию `/workspace/potok-samples/alfa-online-statement.xlsx`), если файл есть.
