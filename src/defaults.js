@@ -15,18 +15,18 @@ export const GROUP_LABELS = {
 };
 
 export const ACCOUNT_TYPES = [
-  { id: "checking", label: "Карта / счёт" },
+  { id: "checking", label: "Дебетовая карта" },
   { id: "cash", label: "Наличные" },
-  { id: "savings", label: "Накопления" },
-  { id: "credit", label: "Кредит (минус — долг)" },
+  { id: "savings", label: "Накопительный счёт" },
+  { id: "credit", label: "Кредитная карта" },
   { id: "investment", label: "Инвестиции" },
 ];
 
 export const DEFAULT_CATEGORIES = [
-  ["Зарплата", "income", "income", "◆", "#e0b15a", null, "зарплата,оклад,salary"],
-  ["Аванс", "income", "income", "◇", "#d4a85a", null, "аванс"],
-  ["Премия", "income", "income", "★", "#f0d7a2", null, "премия,бонус"],
-  ["Подработка", "income", "income", "✚", "#c4a574", null, "фриланс,подработка,гонорар"],
+  ["Зарплата", "income", "income", "◆", "#4da3ff", null, "зарплата,оклад,salary"],
+  ["Аванс", "income", "income", "◇", "#6eb0ff", null, "аванс"],
+  ["Премия", "income", "income", "★", "#9dceff", null, "премия,бонус"],
+  ["Подработка", "income", "income", "✚", "#7eb6e8", null, "фриланс,подработка,гонорар"],
   ["Прочий доход", "income", "income", "•", "#b7a48a", null, "кэшбэк,процент,возврат"],
   ["Жильё", "expense", "needs", "⌂", "#d4785a", 55000, "аренда,жкх,квартира,коммунал,ипотека"],
   ["Продукты", "expense", "needs", "▤", "#9caf72", 28000, "пятерочка,магнит,перекресток,лента,вкусвилл,продукты,азбука,дикси,верный"],
@@ -39,8 +39,8 @@ export const DEFAULT_CATEGORIES = [
   ["Развлечения", "expense", "wants", "✶", "#7e8ec4", 5000, "кино,театр,концерт,игры"],
   ["Маркетплейсы", "expense", "wants", "▣", "#c4a06a", 7000, "ozon,wildberries,яндекс маркет,авито,маркетплейс"],
   ["Образование", "expense", "wants", "✎", "#6a9ec4", 4000, "курс,книга,литрес,нетология,skillbox"],
-  ["Накопления", "expense", "savings", "▣", "#e0b15a", null, "накопления,вклад,подушка"],
+  ["Накопления", "expense", "savings", "▣", "#4da3ff", null, "накопления,вклад,подушка"],
   ["Прочее", "expense", "wants", "•", "#8a8678", null, ""],
 ];
 
-export const ACCOUNT_COLORS = ["#e0b15a", "#9caf72", "#7ea0b8", "#d4785a", "#b48ab8", "#d4c07a"];
+export const ACCOUNT_COLORS = ["#4da3ff", "#5ecf9a", "#7eb6e8", "#f0816a", "#9b8cff", "#6ec8d4"];
