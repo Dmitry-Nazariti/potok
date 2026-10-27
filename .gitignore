@@ -13,3 +13,12 @@ Thumbs.db
 *.swp
 .idea/
 .vscode/
+
+# Dependencies
+node_modules/
+
+# Bank statements contain personal data (never commit)
+*.xlsx
+*.xls
+potok-samples/
+*-statement.*

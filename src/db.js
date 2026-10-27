@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { dbPath, dataDir } from "./config.js";
+import { maskAccount, parseAlfaExcel } from "./alfaExcel.js";
 import { ACCOUNT_COLORS, DEFAULT_CATEGORIES, STRATEGY_PRESETS } from "./defaults.js";
 import {
   advanceDate,
@@ -1093,6 +1094,9 @@ export function exportAll() {
 export function resetAll() {
   db.exec(`
     DELETE FROM transactions;
+    DELETE FROM account_links;
+    DELETE FROM import_batches;
+    DELETE FROM connections;
     DELETE FROM recurring;
     DELETE FROM goals;
     DELETE FROM recommendations;
@@ -1115,4 +1119,144 @@ export function lastAgentRun() {
 
 export function markAgentRun() {
   setSetting("last_agent_run", isoStamp());
+}
+
+// --- File import (Alfa Excel v1). transactions.source = 'import', connections.provider = 'csv'. ---
+
+function mapBatch(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    connectionId: row.connection_id,
+    accountId: row.account_id,
+    kind: row.kind,
+    status: row.status,
+    startedAt: row.started_at,
+    finishedAt: row.finished_at,
+    stats: JSON.parse(row.stats_json || "{}"),
+  };
+}
+
+// One 'csv' connection per account_link: reuse it if this account already has a link with that external id.
+export function ensureCsvConnection({ label, accountId, externalAccountId, meta = {} }) {
+  if (!getAccount(accountId)) throw new Error("Счёт не найден");
+  const existing = one(
+    `SELECT c.id AS connection_id FROM account_links l JOIN connections c ON c.id = l.connection_id
+     WHERE c.provider = 'csv' AND l.external_account_id = ?`,
+    externalAccountId,
+  );
+  if (existing) {
+    const link = one("SELECT account_id FROM account_links WHERE connection_id = ?", existing.connection_id);
+    if (link.account_id !== Number(accountId)) throw new Error("Эта выписка уже привязана к другому счёту");
+    return existing.connection_id;
+  }
+  const conn = run(
+    "INSERT INTO connections (provider, label, status, meta_json, created_at) VALUES ('csv', ?, 'active', ?, ?)",
+    label,
+    JSON.stringify(meta),
+    isoStamp(),
+  );
+  const connectionId = Number(conn.lastInsertRowid);
+  run(
+    "INSERT INTO account_links (account_id, connection_id, external_account_id, is_primary) VALUES (?, ?, ?, 1)",
+    accountId,
+    connectionId,
+    externalAccountId,
+  );
+  return connectionId;
+}
+
+export function createImportBatch({ connectionId, accountId, kind }) {
+  const result = run(
+    "INSERT INTO import_batches (connection_id, account_id, kind, status, started_at) VALUES (?, ?, ?, 'running', ?)",
+    connectionId,
+    accountId,
+    kind,
+    isoStamp(),
+  );
+  return Number(result.lastInsertRowid);
+}
+
+export function finishImportBatch(id, { status, stats }) {
+  run(
+    "UPDATE import_batches SET status = ?, finished_at = ?, stats_json = ? WHERE id = ?",
+    status,
+    isoStamp(),
+    JSON.stringify(stats || {}),
+    id,
+  );
+  return getImportBatch(id);
+}
+
+export function getImportBatch(id) {
+  return mapBatch(one("SELECT * FROM import_batches WHERE id = ?", id));
+}
+
+// Returns 'inserted' | 'updated' | 'skipped'. Category and notes set by the user are never overwritten.
+export function upsertImportedTransaction({ accountId, batchId, externalId, type, amount, happenedOn, description, notes = "" }) {
+  if (!externalId) throw new Error("Нет external_id");
+  if (!["income", "expense"].includes(type)) throw new Error("Некорректный тип операции");
+  const value = money(amount);
+  if (!(value > 0)) throw new Error("Сумма должна быть больше нуля");
+  if (!isValidDate(happenedOn)) throw new Error("Некорректная дата");
+  const desc = String(description || "").trim() || "Импорт";
+  const prev = one("SELECT * FROM transactions WHERE account_id = ? AND external_id = ?", accountId, externalId);
+  if (prev) {
+    if (prev.type === type && prev.amount === value && prev.happened_on === happenedOn && prev.description === desc) return "skipped";
+    run(
+      "UPDATE transactions SET type = ?, amount = ?, happened_on = ?, description = ?, import_batch_id = ? WHERE id = ?",
+      type, value, happenedOn, desc, batchId, prev.id,
+    );
+    return "updated";
+  }
+  run(
+    `INSERT INTO transactions
+      (account_id, type, amount, happened_on, description, notes, source, created_at, external_id, import_batch_id)
+     VALUES (?, ?, ?, ?, ?, ?, 'import', ?, ?, ?)`,
+    accountId, type, value, happenedOn, desc, String(notes).trim(), isoStamp(), externalId, batchId,
+  );
+  return "inserted";
+}
+
+export async function runAlfaExcelImport({ accountId, input, includeHolds = false }) {
+  accountId = Number(accountId);
+  if (!getAccount(accountId)) throw new Error("Счёт не найден");
+  const parsed = await parseAlfaExcel(input, { includeHolds });
+  const { meta } = parsed;
+  const externalAccountId = meta.accountNumber ? `alfa:acct:${meta.accountNumber}` : `alfa:manual:${accountId}`;
+  const connectionId = ensureCsvConnection({
+    label: "Выписка Альфа",
+    accountId,
+    externalAccountId,
+    meta: { bank: "alfa", format: "xlsx", account: maskAccount(meta.accountNumber) },
+  });
+  const batchId = createImportBatch({ connectionId, accountId, kind: "excel" });
+  const stats = { inserted: 0, updated: 0, skipped: 0, holdsSkipped: 0, errors: parsed.errors.length };
+  try {
+    db.exec("BEGIN");
+    for (const row of parsed.rows) {
+      if (row.skipped) {
+        stats.skipped++;
+        if (row.skipReason === "hold") stats.holdsSkipped++;
+        continue;
+      }
+      stats[upsertImportedTransaction({
+        accountId,
+        batchId,
+        externalId: row.externalId,
+        type: row.type,
+        amount: row.amountAbs,
+        happenedOn: row.happenedOn,
+        description: row.description,
+      })]++;
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    run("UPDATE connections SET status = 'error', last_error = ? WHERE id = ?", String(error.message), connectionId);
+    finishImportBatch(batchId, { status: "failed", stats: { ...stats, error: error.message } });
+    throw error;
+  }
+  run("UPDATE connections SET status = 'active', last_sync_at = ?, last_error = NULL WHERE id = ?", isoStamp(), connectionId);
+  return finishImportBatch(batchId, { status: "done", stats });
 }
