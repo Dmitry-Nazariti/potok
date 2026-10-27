@@ -1,0 +1,14 @@
+{
+  "name": "potok",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Локальный учёт финансового потока с агентами и рекомендациями",
+  "scripts": {
+    "start": "node src/index.js",
+    "check": "node src/selfcheck.js"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
