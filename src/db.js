@@ -144,6 +144,64 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_rec_fp ON recommendations(fingerprint);
 `);
 
+// --- File import foundation (Excel/CSV, Alfa v1). Additive only. ---
+// provider = source channel ('csv' = any file); file format lives in import_batches.kind.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS connections (
+    id INTEGER PRIMARY KEY,
+    provider TEXT NOT NULL CHECK (provider IN ('csv')),
+    label TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('active','error','disconnected')),
+    last_sync_at TEXT,
+    last_error TEXT,
+    meta_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL
+  ) STRICT;
+
+  CREATE TABLE IF NOT EXISTS account_links (
+    id INTEGER PRIMARY KEY,
+    account_id INTEGER NOT NULL REFERENCES accounts(id),
+    connection_id INTEGER NOT NULL REFERENCES connections(id),
+    external_account_id TEXT NOT NULL,
+    is_primary INTEGER NOT NULL DEFAULT 1,
+    UNIQUE(connection_id, external_account_id),
+    UNIQUE(account_id, connection_id)
+  ) STRICT;
+
+  CREATE TABLE IF NOT EXISTS import_batches (
+    id INTEGER PRIMARY KEY,
+    connection_id INTEGER REFERENCES connections(id),
+    account_id INTEGER NOT NULL REFERENCES accounts(id),
+    kind TEXT NOT NULL CHECK (kind IN ('csv','excel')),
+    status TEXT NOT NULL CHECK (status IN ('running','done','failed')),
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    stats_json TEXT NOT NULL DEFAULT '{}'
+  ) STRICT;
+`);
+
+// SQLite has no ADD COLUMN IF NOT EXISTS: check pragma_table_info first.
+function addColumnIfMissing(table, column, ddl) {
+  const exists = db
+    .prepare("SELECT 1 FROM pragma_table_info(?) WHERE name = ?")
+    .get(table, column);
+  if (!exists) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
+}
+
+addColumnIfMissing("transactions", "external_id", "TEXT");
+// ADD COLUMN with REFERENCES is allowed because the default is NULL.
+addColumnIfMissing(
+  "transactions",
+  "import_batch_id",
+  "INTEGER REFERENCES import_batches(id) ON DELETE SET NULL"
+);
+
+db.exec(`
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_tx_external ON transactions(account_id, external_id) WHERE external_id IS NOT NULL;
+  CREATE INDEX IF NOT EXISTS idx_account_links_account ON account_links(account_id);
+  CREATE INDEX IF NOT EXISTS idx_import_batches_account ON import_batches(account_id);
+`);
+
 function all(sql, ...params) {
   return db.prepare(sql).all(...params);
 }
