@@ -1,0 +1,15 @@
+# Local database (never commit)
+data/*
+!data/.gitkeep
+
+# Secrets / env
+.env
+.env.*
+!.env.example
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
