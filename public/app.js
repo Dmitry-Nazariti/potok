@@ -127,10 +127,38 @@ function shell(content) {
         </nav>
         <div class="aside-foot">База лежит на этом компьютере. Модель ничего не видит, пока вы сами не нажмёте «Спросить модель».</div>
       </aside>
-      <main>${content}</main>
+      <main class="view-panel">${content}</main>
     </div>
     ${state.modal ? modal() : ""}
   `;
+}
+
+function prefersReducedMotion() {
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
+function playViewEnter() {
+  const main = document.querySelector("main.view-panel");
+  if (!main || prefersReducedMotion()) return;
+  main.classList.remove("view-enter");
+  void main.offsetWidth;
+  main.classList.add("view-enter");
+  const done = () => main.classList.remove("view-enter");
+  main.addEventListener("animationend", done, { once: true });
+  setTimeout(done, 280);
+}
+
+async function switchView(view) {
+  if (view === state.view && !state.modal) return;
+  const main = document.querySelector("main.view-panel");
+  if (main && !prefersReducedMotion()) {
+    main.classList.add("view-leave");
+    await new Promise((resolve) => setTimeout(resolve, 180));
+  }
+  state.view = view;
+  state.modal = null;
+  await refresh();
+  playViewEnter();
 }
 
 function render() {
@@ -188,6 +216,27 @@ function overview() {
     const bi = typeOrder.indexOf(b.type);
     return (ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi) || a.id - b.id;
   });
+  const safeValue = Number(data.safe);
+  const hasSafe = data.salary != null && Number.isFinite(safeValue);
+  const days = data.daysUntilPayday ?? data.safeDays;
+  const paydayBanner = data.salary && (data.paydayOverdue || data.paydayToday)
+    ? `<div class="banner ${data.paydayOverdue ? "banner-warn" : "banner-info"}">
+        <div>
+          <strong>${data.paydayOverdue ? "Выплата не отмечена" : "Сегодня день выплаты"}</strong>
+          <p class="note" style="margin:4px 0 0">${data.paydayOverdue
+            ? `С ${prettyShort(data.salary.nextDate)} деньги ещё не внесены — в план они не входят.`
+            : "Отметьте, когда зарплата будет на счёте."}</p>
+        </div>
+        <button type="button" class="btn" data-act="open-salary">Внести</button>
+      </div>`
+    : "";
+  const accountChips = sortedAccounts.length
+    ? sortedAccounts.map((item) => `
+        <span class="chip account-chip">
+          <i style="background:${color(item.color)}"></i>${esc(item.name)}
+          <b class="amt">${fmt(item.balance)}</b>
+        </span>`).join("")
+    : `<p class="note">Счетов пока нет. Добавьте карту или наличные в настройках.</p>`;
   return `
     <div class="top">
       <div>
@@ -202,17 +251,16 @@ function overview() {
         <div class="ring" style="--p:${data.health}"><strong>${data.health}</strong></div>
       </div>
     </div>
+    ${paydayBanner}
     <div class="grid-2">
       <section class="hero">
-        <div class="kicker">Баланс</div>
-        <div class="hero-num ${totalBalance < 0 ? "bad" : "good"}">${fmt(totalBalance)}</div>
+        <div class="kicker">Свободно до зарплаты</div>
+        <div class="hero-num ${!hasSafe ? "" : safeValue < 0 ? "bad" : "good"}">${hasSafe ? fmt(safeValue) : "—"}</div>
         <p class="sub">${heroText(data)}</p>
-        <div class="accounts" style="margin-top:16px;flex-direction:column;align-items:stretch;gap:8px">
-          ${sortedAccounts.map((item) => `
-            <div class="line" style="padding:6px 0;border-bottom:1px solid var(--line)">
-              <span><i style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${color(item.color)};margin-right:8px"></i>${esc(item.name)} · <span class="note">${esc(accountTypeLabel(item.type))}</span></span>
-              <b class="amt">${fmt(item.balance)}</b>
-            </div>`).join("") || `<p class="note">Счетов пока нет. Добавьте карту или наличные в настройках — позже сюда же смогут подтягиваться остатки из банка.</p>`}
+        ${hasSafe && days != null ? `<p class="hero-meta">${days} дн. до ${prettyShort(data.nextPayday)} · ≈ ${fmt(data.daily)} в день</p>` : ""}
+        <div class="accounts hero-accounts">
+          <span class="note">На счетах ${fmt(totalBalance)}</span>
+          <div class="chip-row">${accountChips}</div>
         </div>
       </section>
       <section class="card">
@@ -221,9 +269,13 @@ function overview() {
         ${planRow("Нужды", selected.needs || 0, "var(--info)", selected.expense || 1)}
         ${planRow("Желания", selected.wants || 0, "var(--accent)", selected.expense || 1)}
         ${planRow("В накопления", selected.savings || 0, "var(--olive)", selected.expense || 1)}
-        <p class="note">${monthTitle(state.month)}${data.salary ? ` · до зарплаты свободно ${fmt(data.safe)}` : ""}</p>
-        <button type="button" class="btn" data-act="open-salary" style="margin-top:12px">Зарплата пришла</button>
+        <p class="note">${monthTitle(state.month)}</p>
       </section>
+    </div>
+    <div class="quick-actions">
+      <button type="button" class="btn-ghost" data-act="open-tx" data-type="expense">+ Расход</button>
+      <button type="button" class="btn-ghost" data-act="open-tx" data-type="income">+ Доход</button>
+      <button type="button" class="btn-ghost" data-act="open-salary">Отметить выплату</button>
     </div>
     <div class="grid-4">
       ${stat("Доходы", selected.income, "pos")}
@@ -269,11 +321,10 @@ function healthWord(n) {
   return "Нужно внимание";
 }
 function heroText(data) {
-  if (!data.salary) return "Остатки по счетам. День и сумма зарплаты помогут считать свободные деньги до выплаты. Позже сюда же можно будет подтянуть данные из банка.";
+  if (!data.salary) return "Задайте день и сумму зарплаты — тогда здесь будет, сколько реально можно потратить до выплаты. На счетах — строкой ниже.";
   if (data.paydayOverdue) return `Выплата с ${prettyShort(data.salary.nextDate)} не отмечена. Пока она не внесена, эти деньги в план не входят.`;
   if (data.safe < 0) return `До ${prettyShort(data.nextPayday)} обязательные платежи ${fmt(data.obligationTotal)} больше свободных денег. Крупные желания лучше не начинать.`;
-  const days = data.daysUntilPayday ?? data.safeDays;
-  return `Свободно до зарплаты: ${fmt(data.safe)} · около ${fmt(data.daily)} в день · ${days} дн. до ${prettyShort(data.nextPayday)}.`;
+  return "Это не остаток на карте: из свободных вычтены буфер и платежи до следующей зарплаты.";
 }
 function planRow(label, amount, paint, maxHint) {
   const max = Math.max(Math.abs(maxHint ?? state.overview?.paycheck?.income ?? 1), 1);
@@ -365,24 +416,25 @@ function transactions() {
 function salary() {
   const data = state.overview;
   const recurring = state.bundle?.recurring || [];
+  const paycheck = data?.paycheck || {};
   return `
     <div class="top"><div><p class="kicker">Выплаты и повторы</p><h1>Зарплата</h1></div>
       <div class="row">
-        <button type="button" class="btn" data-act="open-salary">Зарплата пришла</button>
+        <button type="button" class="btn" data-act="open-salary">Внести выплату</button>
         <button type="button" class="btn-ghost" data-act="open-recurring">Новый повтор</button>
       </div>
     </div>
     <div class="grid-2">
       <section class="hero">
-        <div class="kicker">${data?.salary ? `Следующая ${pretty(data.salary.nextDate)}` : "График не задан"}</div>
+        <div class="kicker">${data?.salary ? `Следующая зарплата · ${pretty(data.salary.nextDate)}` : "График не задан"}</div>
         <div class="hero-num">${data?.salary ? fmt(data.salary.amount) : "—"}</div>
         <p class="sub">${data?.paydayOverdue ? "Дата прошла, поступление не отмечено." : data?.paydayToday ? "Сегодня день выплаты. Отметьте, когда деньги будут на счёте." : "Отмечать стоит факт, а не ожидание. Прогноз сам подставит будущие даты."}</p>
       </section>
       <section class="card">
         <h2>Куда уйдёт выплата</h2>
-        <div class="line"><span>Обязательные до следующей</span><b>${fmt(data?.paycheck.bills || 0)}</b></div>
-        <div class="line"><span>Норма накоплений</span><b>${fmt(data?.paycheck.savings || 0)}</b></div>
-        <div class="line"><span>Останется на жизнь</span><b class="${(data?.paycheck.left || 0) < 0 ? "danger-text" : "ok-text"}">${fmt(data?.paycheck.left || 0)}</b></div>
+        <div class="line"><span>Обязательные до следующей</span><b>${fmt(paycheck.bills || 0)}</b></div>
+        <div class="line"><span>Норма накоплений</span><b>${fmt(paycheck.savings || 0)}</b></div>
+        <div class="line"><span>Останется на жизнь</span><b class="${(paycheck.left || 0) < 0 ? "danger-text" : "ok-text"}">${fmt(paycheck.left || 0)}</b></div>
         <p class="note">Подписки сейчас ${fmt(data?.subscriptionMonthly || 0)} в месяц.</p>
       </section>
     </div>
@@ -680,9 +732,7 @@ async function onClick(event) {
   const id = el.dataset.id;
   try {
     if (act === "nav") {
-      state.view = el.dataset.view;
-      state.modal = null;
-      await refresh();
+      await switchView(el.dataset.view);
     } else if (act === "month") {
       state.month = shiftMonth(state.month, Number(el.dataset.delta));
       await refresh();
@@ -719,7 +769,7 @@ async function onClick(event) {
     } else if (act === "open-salary") {
       const salary = state.overview?.salary;
       state.pending = null;
-      openModal("Зарплата пришла", `<form data-form="salary"><div class="form-grid">
+      openModal("Внести выплату", `<form data-form="salary"><div class="form-grid">
         <label>Что это<select name="payKind"><option value="salary">Основная зарплата</option><option value="advance">Аванс</option><option value="bonus">Премия</option></select></label>
         <label>Сумма<input name="amount" type="number" step="0.01" value="${salary?.amount || ""}" required></label>
         <label>Дата<input name="date" type="date" value="${state.meta.today}"></label>

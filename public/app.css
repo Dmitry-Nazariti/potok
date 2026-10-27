@@ -80,11 +80,28 @@ nav button, .btn, .btn-ghost, .btn-danger {
   padding: 10px 12px;
   text-align: left;
 }
-nav button { color: var(--muted); }
+nav button {
+  color: var(--muted);
+  transition: background 150ms ease, color 150ms ease, box-shadow 150ms ease;
+}
 nav button.active, nav button:hover { background: var(--surface); color: var(--text); }
 nav button.active { box-shadow: inset 2px 0 0 var(--brass); }
 .aside-foot { margin-top: auto; padding: 0 10px; font-size: 12px; line-height: 1.45; }
 main { padding: 32px 36px 64px; max-width: 1180px; }
+.view-panel {
+  transition: opacity 200ms ease-out, transform 200ms ease-out;
+}
+.view-panel.view-leave {
+  opacity: 0;
+  transform: translateY(8px);
+}
+.view-panel.view-enter {
+  animation: view-in 200ms ease-out;
+}
+@keyframes view-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
 .top {
   display: flex;
   justify-content: space-between;
@@ -131,6 +148,49 @@ h2 { font-size: 18px; }
 }
 .hero-num.bad { color: var(--clay); }
 .hero-num.good { color: var(--brass-2); }
+.hero-meta {
+  margin: 0 0 4px;
+  color: var(--accent-2);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+.hero-accounts {
+  margin-top: 16px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.account-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.03);
+}
+.account-chip .amt { color: var(--text); font-weight: 600; }
+.banner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+}
+.banner-warn { box-shadow: inset 3px 0 0 var(--brass); }
+.banner-info { box-shadow: inset 3px 0 0 var(--info); }
+.quick-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 4px 0 8px;
+}
 .sub { color: var(--muted); line-height: 1.5; }
 .stat { padding: 14px 16px; }
 .stat b { display: block; margin-top: 6px; font-size: 22px; font-variant-numeric: tabular-nums; letter-spacing: -0.04em; }
@@ -291,5 +351,13 @@ tr.clickable:hover td { background: rgba(255,255,255,0.02); }
   .bar-row { grid-template-columns: 1fr; gap: 4px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  * { transition: none !important; }
+  *, *::before, *::after {
+    transition: none !important;
+    animation: none !important;
+  }
+  .view-panel.view-leave,
+  .view-panel.view-enter {
+    opacity: 1 !important;
+    transform: none !important;
+  }
 }
