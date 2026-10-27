@@ -11,6 +11,10 @@ const state = {
   modal: null,
   pending: null,
   importPreview: null,
+  alfaPreview: null,
+  alfaResult: null,
+  alfaFile: null,
+  alfaBusy: false,
   ai: null,
   busy: false,
 };
@@ -108,6 +112,26 @@ async function api(path, options = {}) {
   if (!response.ok) throw new Error(data.error || "Не удалось выполнить запрос");
   return data;
 }
+async function uploadAlfa(path, { file, accountId, includeHolds }) {
+  const body = new FormData();
+  body.append("file", file);
+  if (accountId) body.append("accountId", String(accountId));
+  if (includeHolds) body.append("includeHolds", "true");
+  const response = await fetch(path, { method: "POST", body });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || "Не удалось загрузить выписку");
+  return data;
+}
+function alfaFileInput() {
+  return document.querySelector("#alfa-file");
+}
+function alfaAccountId() {
+  return document.querySelector("#alfa-account")?.value || accounts()[0]?.id || "";
+}
+function alfaIncludeHolds() {
+  return Boolean(document.querySelector("#alfa-holds")?.checked);
+}
+
 function accounts() { return state.bundle?.accounts || []; }
 function categories() { return state.bundle?.categories || []; }
 function catName(id) { return categories().find((item) => item.id === Number(id))?.name || "—"; }
@@ -276,6 +300,7 @@ function overview() {
       <button type="button" class="btn-ghost" data-act="open-tx" data-type="expense">+ Расход</button>
       <button type="button" class="btn-ghost" data-act="open-tx" data-type="income">+ Доход</button>
       <button type="button" class="btn-ghost" data-act="open-salary">Отметить выплату</button>
+      <button type="button" class="btn-ghost" data-act="nav" data-view="import">Загрузить выписку</button>
     </div>
     <div class="grid-4">
       ${stat("Доходы", selected.income, "pos")}
@@ -389,6 +414,7 @@ function transactions() {
         <button type="button" class="btn" data-act="open-tx" data-type="expense">Расход</button>
         <button type="button" class="btn-ghost" data-act="open-tx" data-type="income">Доход</button>
         <button type="button" class="btn-ghost" data-act="open-transfer">Перевод</button>
+        <button type="button" class="btn-ghost" data-act="nav" data-view="import">Импорт из Альфы</button>
       </div>
     </div>
     <div class="filters">
@@ -523,21 +549,89 @@ function agents() {
 
 function importView() {
   const preview = state.importPreview;
+  const alfa = state.alfaPreview;
+  const result = state.alfaResult;
+  const counts = alfa?.counts;
+  const meta = alfa?.meta || {};
+  const period = meta.periodFrom && meta.periodTo
+    ? `${pretty(meta.periodFrom)} — ${pretty(meta.periodTo)}`
+    : "период не указан в файле";
+  const defaultAccount = accounts()[0]?.id;
   return `
     <div class="top"><div><p class="kicker">Выписка</p><h1>Импорт</h1></div></div>
-    <p class="sub">CSV с колонками «дата», «сумма», «описание» или отдельно приход и расход. Разделитель запятая, точка с запятой или таб. Пример: samples/statement.csv</p>
-    <div class="card">
-      <div class="row">
-        <input id="csv-file" type="file" accept=".csv,text/csv,text/plain">
-        <label style="flex:1">Счёт для импорта<select id="import-account">${options(accounts(), accounts()[0]?.id, (item) => item.name)}</select></label>
+
+    <section class="card import-alfa">
+      <div class="section-head">
+        <div>
+          <h2>Импорт из Альфы</h2>
+          <p class="note" style="margin-top:6px">Скачайте выписку по счёту в Альфа-Онлайн (.xlsx) и загрузите сюда. Сначала покажем сводку, потом запишем операции. Повторная загрузка того же файла не создаст дубли.</p>
+        </div>
       </div>
-      <label style="margin-top:12px">Или вставьте текст<textarea id="csv-text" placeholder="Дата;Сумма;Описание"></textarea></label>
-      <div class="row" style="margin-top:12px"><button type="button" class="btn" data-act="preview-csv">Разобрать</button></div>
-    </div>
-    ${preview ? `<section class="section"><div class="section-head"><h2>${preview.rows.length} строк</h2><button type="button" class="btn" data-act="commit-csv">Импортировать</button></div>
-      <div class="table-wrap"><table><thead><tr><th>Дата</th><th>Описание</th><th>Категория</th><th class="num">Сумма</th></tr></thead>
-      <tbody>${preview.rows.slice(0, 40).map((row) => `<tr><td>${pretty(row.date)}</td><td>${esc(row.description)}</td><td>${esc(row.categoryName || "—")}</td><td class="num">${row.type === "income" ? "+" : "−"}${fmt(row.amount)}</td></tr>`).join("")}</tbody></table></div>
-      <p class="note">${(preview.warnings || []).join(" · ")}</p></section>` : ""}`;
+      <div class="form-grid" style="margin-top:12px">
+        <label class="wide">Счёт, куда записать операции
+          <select id="alfa-account">${options(accounts(), defaultAccount, (item) => item.name, accounts().length ? null : "Сначала добавьте счёт")}</select>
+        </label>
+        <label class="wide">Файл выписки (.xlsx)
+          <input id="alfa-file" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
+          ${state.alfaFile ? `<span class="note">Выбран: ${esc(state.alfaFile.name)}</span>` : `<span class="note">Файл останется в памяти после сводки — его не нужно выбирать заново.</span>`}
+        </label>
+        <label class="wide check-row"><input id="alfa-holds" type="checkbox"> Включать холды (обычно лучше оставить выкл.)</label>
+      </div>
+      <div class="row" style="margin-top:14px">
+        <button type="button" class="btn" data-act="preview-alfa" ${state.alfaBusy ? "disabled" : ""}>${state.alfaBusy ? "Читаю файл…" : "Посмотреть сводку"}</button>
+      </div>
+      ${result ? `<div class="banner banner-info" style="margin-top:16px">
+        <div>
+          <strong>Готово</strong>
+          <p class="note" style="margin:4px 0 0">Добавлено: ${result.stats?.inserted ?? 0} · обновлено: ${result.stats?.updated ?? 0} · пропущено: ${result.stats?.skipped ?? 0}${result.stats?.holdsSkipped ? ` (из них холды: ${result.stats.holdsSkipped})` : ""}${result.stats?.errors ? ` · ошибок: ${result.stats.errors}` : ""}</p>
+        </div>
+        <button type="button" class="btn-ghost" data-act="nav" data-view="transactions">К операциям</button>
+      </div>` : ""}
+      ${alfa ? `<div class="alfa-summary">
+        <div class="grid-4" style="margin:16px 0 0">
+          ${stat("К загрузке", counts.importable)}
+          ${stat("Доходы", counts.income, "pos")}
+          ${stat("Расходы", counts.expense, "neg")}
+          ${stat("Пропуски", counts.skipped + (counts.errors || 0))}
+        </div>
+        <p class="note" style="margin-top:12px">Период: ${period}${meta.accountNumber ? ` · счёт в файле ${esc(meta.accountNumber)}` : ""}${counts.holds ? ` · холдов в файле: ${counts.holds}` : ""}</p>
+        ${(alfa.errors || []).length ? `<p class="danger-text note">Ошибки разбора: ${alfa.errors.slice(0, 5).map((e) => esc(typeof e === "string" ? e : e.message || JSON.stringify(e))).join("; ")}</p>` : ""}
+        <div class="row" style="margin-top:14px">
+          <button type="button" class="btn" data-act="commit-alfa" ${state.alfaBusy || !counts.importable ? "disabled" : ""}>${state.alfaBusy ? "Загружаю…" : "Загрузить"}</button>
+          <button type="button" class="btn-ghost" data-act="clear-alfa">Сбросить</button>
+        </div>
+        <div class="table-wrap" style="margin-top:14px">
+          <table>
+            <thead><tr><th>Дата</th><th>Описание</th><th>Статус</th><th class="num">Сумма</th></tr></thead>
+            <tbody>
+              ${(alfa.rows || []).slice(0, 40).map((row) => `<tr>
+                <td>${pretty(row.happenedOn || row.date)}</td>
+                <td>${esc(row.description || "—")}</td>
+                <td>${row.skipped ? `<span class="note">${esc(row.skipReason === "hold" ? "холд" : "пропуск")}</span>` : row.type === "income" ? "доход" : "расход"}</td>
+                <td class="num ${row.type === "income" ? "ok-text" : "danger-text"}">${row.type === "income" ? "+" : "−"}${fmt(row.amountAbs ?? row.amount)}</td>
+              </tr>`).join("") || `<tr><td colspan="4" class="empty">Строк нет</td></tr>`}
+            </tbody>
+          </table>
+        </div>
+      </div>` : ""}
+    </section>
+
+    <section class="section">
+      <div class="section-head"><h2>Или CSV</h2></div>
+      <p class="sub">Колонки «дата», «сумма», «описание» или отдельно приход и расход. Пример: samples/statement.csv</p>
+      <div class="card" style="margin-top:12px">
+        <div class="row">
+          <input id="csv-file" type="file" accept=".csv,text/csv,text/plain">
+          <label style="flex:1">Счёт для импорта<select id="import-account">${options(accounts(), accounts()[0]?.id, (item) => item.name)}</select></label>
+        </div>
+        <label style="margin-top:12px">Или вставьте текст<textarea id="csv-text" placeholder="Дата;Сумма;Описание"></textarea></label>
+        <div class="row" style="margin-top:12px"><button type="button" class="btn-ghost" data-act="preview-csv">Разобрать CSV</button></div>
+      </div>
+      ${preview ? `<div class="section-head" style="margin-top:16px"><h2>${preview.rows.length} строк</h2><button type="button" class="btn" data-act="commit-csv">Импортировать CSV</button></div>
+        <div class="table-wrap"><table><thead><tr><th>Дата</th><th>Описание</th><th>Категория</th><th class="num">Сумма</th></tr></thead>
+        <tbody>${preview.rows.slice(0, 40).map((row) => `<tr><td>${pretty(row.date)}</td><td>${esc(row.description)}</td><td>${esc(row.categoryName || "—")}</td><td class="num">${row.type === "income" ? "+" : "−"}${fmt(row.amount)}</td></tr>`).join("")}</tbody></table></div>
+        <p class="note">${(preview.warnings || []).join(" · ")}</p>` : ""}
+    </section>`;
 }
 
 function settings() {
@@ -846,6 +940,54 @@ async function onClick(event) {
       if (!result.narration?.ok) throw new Error(result.narration?.error || "Модель не ответила");
       await refresh();
       toast("Сводка модели готова");
+    } else if (act === "preview-alfa") {
+      const picked = alfaFileInput()?.files?.[0];
+      if (picked) state.alfaFile = picked;
+      const file = state.alfaFile;
+      if (!accounts().length) throw new Error("Сначала добавьте счёт в настройках");
+      if (!file) throw new Error("Выберите файл выписки .xlsx");
+      state.alfaBusy = true;
+      state.alfaResult = null;
+      render();
+      try {
+        state.alfaPreview = await uploadAlfa("/api/import/alfa/preview", {
+          file,
+          accountId: alfaAccountId(),
+          includeHolds: alfaIncludeHolds(),
+        });
+      } finally {
+        state.alfaBusy = false;
+        render();
+      }
+    } else if (act === "commit-alfa") {
+      const picked = alfaFileInput()?.files?.[0];
+      if (picked) state.alfaFile = picked;
+      const file = state.alfaFile;
+      if (!file) throw new Error("Выберите файл выписки .xlsx");
+      if (!alfaAccountId()) throw new Error("Выберите счёт");
+      state.alfaBusy = true;
+      render();
+      try {
+        const out = await uploadAlfa("/api/import/alfa/commit", {
+          file,
+          accountId: alfaAccountId(),
+          includeHolds: alfaIncludeHolds(),
+        });
+        state.alfaResult = out;
+        state.alfaPreview = null;
+        await refresh();
+        toast(`Загружено: +${out.stats?.inserted ?? 0}, пропуск ${out.stats?.skipped ?? 0}`);
+      } finally {
+        state.alfaBusy = false;
+        render();
+      }
+    } else if (act === "clear-alfa") {
+      state.alfaPreview = null;
+      state.alfaResult = null;
+      state.alfaFile = null;
+      const input = alfaFileInput();
+      if (input) input.value = "";
+      render();
     } else if (act === "preview-csv") {
       const text = document.querySelector("#csv-text").value;
       state.importPreview = await api("/api/import/preview", { method: "POST", body: { text } });
@@ -899,6 +1041,11 @@ function onChange(event) {
     target.files[0].text().then((text) => {
       document.querySelector("#csv-text").value = text;
     });
+  } else if (target.id === "alfa-file" && target.files?.[0]) {
+    state.alfaFile = target.files[0];
+    state.alfaPreview = null;
+    state.alfaResult = null;
+    render();
   } else if (target.dataset.field === "budget") {
     const value = target.value === "" ? null : Number(target.value);
     api(`/api/categories/${target.dataset.id}`, { method: "PATCH", body: { monthlyBudget: value } })
